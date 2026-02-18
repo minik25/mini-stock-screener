@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import date
+import time
+from yfinance.exceptions import YFRateLimitError
+
 
 st.set_page_config(page_title="Stock Screener", layout="wide")
 
@@ -73,6 +76,40 @@ def fetch_prices(tickers, period="2y"):
 
     close.index = pd.to_datetime(close.index)
     return close
+
+@st.cache_data(ttl=60*60)
+def fetch_prices_safe(tickers, period="max", retries=3, pause=2.0):
+    last_err = None
+
+    for i in range(retries):
+        try:
+            df = yf.download(
+                tickers=tickers,
+                period=period,
+                group_by="column",
+                progress=False,
+                threads=False,   # important
+            )
+
+            if df is None or df.empty:
+                return pd.DataFrame()
+
+            if isinstance(df.columns, pd.MultiIndex):
+                close = df["Close"]
+            else:
+                close = df[["Close"]]
+                close.columns = tickers
+
+            close.index = pd.to_datetime(close.index)
+            return close
+
+        except YFRateLimitError:
+            time.sleep(pause * (i + 1))
+        except Exception:
+            time.sleep(0.5)
+
+    return pd.DataFrame()
+
 
 # -----------------------------
 # Fetch fundamentals (valuation + growth) for screeners
@@ -285,7 +322,7 @@ with tab3:
     st.subheader("Major Indices (Levels + Returns)")
 
     idx_tickers = list(INDEX_MAP.values())
-    prices = fetch_prices(idx_tickers, period="max")
+    prices = fetch_prices_safe(idx_tickers, period="max")
 
     rows = []
     for name, t in INDEX_MAP.items():
@@ -341,4 +378,5 @@ with tab3:
     st.caption(
         "Returns are calculated from daily close prices: 5D (5 trading days), "
         "MTD, YTD, ~252 trading days for 1Y, and max history for all-time."
+
     )
