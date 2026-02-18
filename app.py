@@ -5,7 +5,7 @@ import yfinance as yf
 from datetime import date
 import time
 from yfinance.exceptions import YFRateLimitError
-
+import random
 
 st.set_page_config(page_title="Stock Screener", layout="wide")
 
@@ -60,14 +60,41 @@ def calc_returns(series: pd.Series):
     out["All"] = (last / series.iloc[0] - 1) * 100
 
     return out
+# -----------------------------
+# Retry helpers (for rate limits)
+# -----------------------------
+def _sleep_jitter(base=0.6, jitter=0.6):
+    time.sleep(base + random.random() * jitter)
+
+def _retry_call(fn, tries=3):
+    last_err = None
+    for i in range(tries):
+        try:
+            return fn()
+        except YFRateLimitError as e:
+            last_err = e
+            _sleep_jitter(1.0, 1.5)
+        except Exception as e:
+            last_err = e
+            _sleep_jitter(0.5, 1.0)
+    raise last_err
 
 # -----------------------------
 # Fetch price data (indices)
 # -----------------------------
 @st.cache_data(ttl=60*30)
 def fetch_prices(tickers, period="2y"):
-    data = yf.download(tickers, period=period, group_by="column", progress=False)
+    data = _retry_call(lambda: yf.download(
+        tickers,
+        period=period,
+        group_by="column",
+        progress=False
+    ))
 
+    if data is None or data.empty:
+        return pd.DataFrame()
+
+    # Extract Close prices
     if isinstance(data.columns, pd.MultiIndex):
         close = data["Close"]
     else:
@@ -380,3 +407,4 @@ with tab3:
         "MTD, YTD, ~252 trading days for 1Y, and max history for all-time."
 
     )
+
